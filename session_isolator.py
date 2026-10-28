@@ -30,11 +30,14 @@ class IsolationViolation(Exception):
 class SessionIsolator:
     """按 (bot_id, user_id) 命名空间隔离的会话存储。"""
 
-    def __init__(self, db_path=None):
+    def __init__(self, db_path=None, identity=None):
         # _store[bot][user][kind][session_id] = record
         self._store = {}
         self._audit = []          # 越权/拒绝事件
         self.db_path = db_path
+        # identity: 当前调用方的 (bot_id, user_id)；None = 底层原语模式（不鉴权）。
+        # 绑定身份后，write() 对他人命名空间的写入将真实抛 IsolationViolation。
+        self.identity = tuple(identity) if identity else None
         if db_path and os.path.isfile(db_path):
             self._load(db_path)
 
@@ -49,16 +52,25 @@ class SessionIsolator:
         return self._store.setdefault(
             bot, {}).setdefault(user, {"context": {}, "history": {}})
 
+    def _check_write(self, bot, user):
+        """绑定身份模式下，校验写入目标必须是自己的命名空间。"""
+        if self.identity is not None and (bot, user) != self.identity:
+            raise IsolationViolation(
+                f"写入方 {self._ns(*self.identity)} 无权写入命名空间 "
+                f"{self._ns(bot, user)}")
+
     # ------------------------------------------------------------------
     # 写入
     # ------------------------------------------------------------------
     def write(self, bot, user, kind="context", payload=None, session_id=None):
         """写入一条会话记录。kind ∈ {context, history}。
 
-        只允许写入调用方自己的命名空间；越权写入抛 IsolationViolation。
+        底层原语模式（identity=None）：由调用方自行保证只写自己的命名空间。
+        绑定身份模式（identity=(bot,user)）：越权写入抛 IsolationViolation。
         """
         if kind not in ("context", "history"):
             raise ValueError("kind 必须为 'context' 或 'history'")
+        self._check_write(bot, user)
         box = self._ensure(bot, user)[kind]
         sid = session_id or uuid.uuid4().hex[:12]
         box[sid] = {
@@ -132,10 +144,22 @@ class SessionIsolator:
         return path
 
     def _load(self, path):
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self._store = data.get("store", {})
-        self._audit = data.get("audit", [])
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self._store = data.get("store", {})
+            self._audit = data.get("audit", [])
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            # 持久化文件损坏/不可读：优雅降级为空存储，绝不崩溃。
+            # 隔离性不受影响（空存储天然无泄露），数据恢复由上层备份策略负责。
+            self._store = {}
+            self._audit = [{
+                "ts": time.time(),
+                "type": "db_load_failed_reset",
+                "path": str(path),
+                "error": f"{type(e).__name__}: {e}",
+                "action": "started_empty",
+            }]
 
     # ------------------------------------------------------------------
     # 隔离完备性证明（验收核心）
