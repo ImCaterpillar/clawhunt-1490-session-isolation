@@ -81,15 +81,26 @@ blocked = [a for a in iso.audit_log() if a["type"]
 check("8. cross reads are audited", len(blocked) >= 3,
       f"{len(blocked)} blocked events logged")
 
-# 9. 越权写入被硬拒绝
+# 9. 越权写入被硬拒绝（真实触发：绑定身份模式）
+iso_auth = SessionIsolator(identity=("hr-bot", "u-101"))
+iso_auth.write(bot="hr-bot", user="u-101", kind="history",
+               payload={"mine": True})          # 自己的命名空间：OK
 try:
-    # 模拟外部越权写入：直接调内部接口试图写入他人命名空间
-    iso._store.setdefault("victim-bot", {}).setdefault("u-vic", {})
-    # 用 read_with_guard 的护栏验证写入侧：这里验证越权写被拒
-    raise IsolationViolation("simulated")
+    iso_auth.write(bot="finance-bot", user="u-202", kind="history",
+                   payload={"theirs": True})    # 他人命名空间：必须抛
+    write_blocked = False
 except IsolationViolation:
-    check("9. cross-namespace write rejected", True,
-          "IsolationViolation raised on foreign namespace write")
+    write_blocked = True
+check("9. cross-namespace write rejected (real trigger)",
+      write_blocked,
+      "IsolationViolation raised writing foreign namespace")
+
+# 9b. 底层原语模式（identity=None）保持兼容：不鉴权、可写任意命名空间
+iso_raw = SessionIsolator()
+iso_raw.write(bot="x-bot", user="u-x", kind="history", payload={"raw": 1})
+check("9b. primitive mode (no identity) stays compatible",
+      len(iso_raw.read("x-bot", "u-x", "history")) == 1,
+      "raw mode write/read works")
 
 # 10. 持久化往返:隔离性在 reload 后保持
 iso.save("_isolator_test.json")
