@@ -1,0 +1,52 @@
+{
+  "namespace_policy": {
+    "isolation_dimensions": ["bot_id", "user_id"],
+    "default_read_scope": "own_namespace_only",
+    "cross_access_policy": "deny_all_return_empty_audit"
+  },
+  "bots": [
+    {
+      "bot_id": "hr-bot",
+      "display_name": "企业域入职引导 Bot",
+      "domains": ["enterprise_management"],
+      "can_access": ["hr-bot"],
+      "session_kinds": ["context", "history"]
+    },
+    {
+      "bot_id": "finance-bot",
+      "display_name": "财务域发票 Bot",
+      "domains": ["customer_operation", "finance"],
+      "can_access": ["finance-bot"],
+      "session_kinds": ["context", "history"]
+    },
+    {
+      "bot_id": "support-bot",
+      "display_name": "客服域支持 Bot",
+      "domains": ["customer_operation"],
+      "can_access": ["support-bot"],
+      "session_kinds": ["context", "history"]
+    }
+  ],
+  "session_layout": {
+    "context": {
+      "description": "近期会话上下文（当前轮次状态）",
+      "retention": "ephemeral",
+      "scope": "per (bot_id, user_id)"
+    },
+    "history": {
+      "description": "长期会话历史记录",
+      "retention": "persistent",
+      "scope": "per (bot_id, user_id)"
+    }
+  },
+  "validation_scenario": {
+    "name": "cross_access_test",
+    "assertion": "任何 bot 只能读到自己命名空间的数据；交叉访问返回 0 条并记审计",
+    "steps": [
+      "hr-bot 写入自己的 history",
+      "finance-bot 写入自己的 history",
+      "hr-bot 尝试读 finance-bot 的 history -> 0 条（审计记录一条）",
+      "finance-bot 尝试读 hr-bot 的 history -> 0 条（审计记录一条）"
+    ]
+  }
+}
