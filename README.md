@@ -7,14 +7,17 @@
 ## 一条命令验证全部
 
 ```bash
-python run_tests.py      # -> PASS 12 / FAIL 0
+python run_tests.py      # -> PASS 13 / FAIL 0
 ```
 
 ## 验收三要素（与验收标准逐条对应）
 
 **① 核心实现（会话隔离层）路径**
 `session_isolator.py` —— `SessionIsolator` 类，按 `(bot_id, user_id)`
-双维度命名空间隔离会话上下文与历史记录。
+双维度命名空间隔离会话上下文与历史记录。支持两种模式：
+- **绑定身份模式** `SessionIsolator(identity=("hr-bot","u-101"))`：
+  越权写他人命名空间真实抛 `IsolationViolation`；
+- **底层原语模式** `SessionIsolator()`：兼容性保留，身份校验由上层完成。
 
 **② 示例/演示文件路径**
 - `examples/session_layout.json` —— 会话隔离的布局与交叉访问测试场景说明
@@ -26,8 +29,9 @@ python run_tests.py      # -> PASS 12 / FAIL 0
 python run_tests.py
 # ✅ 5. hr-bot CANNOT read finance-bot history   leaked=0
 # ✅ 6. finance-bot CANNOT read hr-bot history    leaked=0
+# ✅ 9. cross-namespace write rejected (real trigger)
 # ...
-# Result: PASS 12   FAIL 0
+# Result: PASS 13   FAIL 0
 ```
 
 反例（必须被拒）—— 越权读取返回 **0 条**并记审计，不泄露任何数据：
@@ -37,6 +41,15 @@ python -c "import session_isolator as s; iso=s.SessionIsolator();
 iso.write('a','u1','history',{'x':1});
 print(iso.read_with_guard('a','u1','b','u1','history'))"
 # []   ← 交叉访问返回空列表，对方记录不可见
+```
+
+越权写入（绑定身份模式）真实抛错：
+
+```bash
+python -c "import session_isolator as s;
+iso=s.SessionIsolator(identity=('a','u1'));
+iso.write('b','u1','history',{'x':1})"
+# session_isolator.IsolationViolation: 写入方 a::u1 无权写入命名空间 b::u1
 ```
 
 ## 快速开始
@@ -52,7 +65,7 @@ python demo.py               # 两 Bot 隔离演示
 ```
 .
 ├── session_isolator.py      # 会话隔离层（核心）
-├── run_tests.py             # 验收验证（12 项断言）
+├── run_tests.py             # 验收验证（13 项断言）
 ├── demo.py                  # 交叉访问演示
 ├── examples/
 │   └── session_layout.json  # 隔离布局说明（含验收场景）
@@ -73,7 +86,8 @@ python demo.py               # 两 Bot 隔离演示
 3. **越权读取静默返回空**：`read_with_guard()` 对跨命名空间读取返回 `[]`
    并记审计，而非抛错——外部调用方无法区分「无数据」与「被隔离」，
    杜绝侧信道探测。
-4. **越权写入硬拒绝**：对他人命名空间的写入抛 `IsolationViolation`（测试 9）。
+4. **越权写入硬拒绝**：绑定身份模式下，对他人命名空间的写入抛
+   `IsolationViolation`（测试 9，真实触发）。
 5. **审计可见**：每次隔离事件都会落审计日志（测试 8），满足安全追踪需求。
 6. **持久化保持隔离**：保存/重载后隔离性不变（测试 10）。
 
